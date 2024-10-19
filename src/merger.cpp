@@ -11,7 +11,6 @@
 #include <cstdint>
 #include <sstream>
 
-// Namespace alias for convenience
 namespace fs = std::filesystem;
 
 // Struct definitions
@@ -22,14 +21,14 @@ struct Posting {
 
 struct LexiconEntry {
     std::string term;
-    uint64_t offset;     // Offset in the final inverted index file
-    uint32_t length;     // Length of the postings list in bytes
+    uint64_t offset;     // Byte offset in the final index file
+    uint32_t length;     // Number of bytes for this term's entry
     uint32_t docFreq;    // Number of documents containing the term
 };
 
 struct PageTableEntry {
     int docID;
-    std::string metadata; // e.g., URL
+    std::string metadata; // e.g., URL or passage
 };
 
 // PostingFileReader class to handle reading from intermediate text files
@@ -67,6 +66,12 @@ public:
         currentPostings.clear();
         std::string postingStr;
         while (iss >> postingStr) {
+            size_t pipePos = postingStr.find('|');
+            if (pipePos != std::string::npos) {
+                // Skip delimiters
+                continue;
+            }
+
             size_t colonPos = postingStr.find(':');
             if (colonPos == std::string::npos) {
                 throw std::runtime_error("Malformed posting: " + postingStr);
@@ -92,10 +97,10 @@ private:
     std::vector<Posting> currentPostings;
 };
 
-// Comparator for the priority queue (min heap based on term)
+// Comparator for the priority queue (min heap based on term lexicographical order)
 struct ComparePQNode {
     bool operator()(const std::pair<std::string, size_t>& a, const std::pair<std::string, size_t>& b) {
-        return a.first > b.first; // Min heap
+        return a.first > b.first; // Min heap based on term
     }
 };
 
@@ -127,7 +132,7 @@ void writeLexiconText(const std::string& lexiconFilePath, const std::vector<Lexi
     lexFile.close();
 }
 
-// Function to build the Page Table from the collection file (unchanged)
+// Function to build the Page Table from the collection file
 std::vector<PageTableEntry> buildPageTable(const std::string& collectionPath) {
     std::vector<PageTableEntry> pageTable;
     std::ifstream infile(collectionPath);
@@ -145,7 +150,7 @@ std::vector<PageTableEntry> buildPageTable(const std::string& collectionPath) {
         int docID = std::stoi(line.substr(0, tabPos));
         std::string passage = line.substr(tabPos + 1);
 
-        // Extract metadata as needed; assuming URL is part of the passage or elsewhere
+        // Extract metadata as needed; assuming URL or passage is the metadata
         // For simplicity, using passage as metadata here
         pageTable.emplace_back(PageTableEntry{docID, passage});
     }
@@ -154,7 +159,7 @@ std::vector<PageTableEntry> buildPageTable(const std::string& collectionPath) {
     return pageTable;
 }
 
-// Function to write the Page Table (unchanged; assuming binary format)
+// Function to write the Page Table in binary format (unchanged)
 void writePageTable(const std::string& pageTablePath, const std::vector<PageTableEntry>& pageTable) {
     std::ofstream pageFile(pageTablePath, std::ios::binary);
     if (!pageFile.is_open()) {
@@ -174,7 +179,7 @@ void writePageTable(const std::string& pageTablePath, const std::vector<PageTabl
     pageFile.close();
 }
 
-// Function to perform k-way merge and build the final inverted index
+// Function to perform k-way merge and build the final inverted index with Differential Encoding and Non-Interleaved Storage
 void mergePostingFiles(const std::vector<std::string>& files, const std::string& indexFilePath,
                       const std::string& lexiconFilePath,
                       std::vector<LexiconEntry>& lexicon) {
@@ -251,37 +256,60 @@ void mergePostingFiles(const std::vector<std::string>& files, const std::string&
             }
         }
 
-        // Record lexicon entry
+        // Differential Encoding for docIDs
+        std::vector<int> gapDocIDs;
+        int previousDocID = 0;
+        for (const auto& posting : uniquePostings) {
+            int gap = posting.docID - previousDocID;
+            gapDocIDs.push_back(gap);
+            previousDocID = posting.docID;
+        }
+
+        // Extract term frequencies
+        std::vector<int> termFreqs;
+        for (const auto& posting : uniquePostings) {
+            termFreqs.push_back(posting.termFreq);
+        }
+
+        // Prepare the line to write
+        std::ostringstream oss;
+        oss << smallestTerm << " |";
+
+        // Write gapDocIDs
+        for (size_t i = 0; i < gapDocIDs.size(); ++i) {
+            oss << " " << gapDocIDs[i];
+        }
+
+        oss << " |";
+
+        // Write termFreqs
+        for (size_t i = 0; i < termFreqs.size(); ++i) {
+            oss << " " << termFreqs[i];
+        }
+
+        oss << "\n";
+
+        std::string line = oss.str();
+
+        // Write the line to the index file
+        indexFile << line;
+
+        // Calculate the number of bytes written for this line
+        // Assuming ASCII encoding, each character is 1 byte
+        size_t lineBytes = line.size();
+
+        // Declare and set lexEntry
         LexiconEntry lexEntry;
         lexEntry.term = smallestTerm;
         lexEntry.offset = currentOffset;
+        lexEntry.length = lineBytes;
         lexEntry.docFreq = uniquePostings.size();
-
-        // Write the term and its postings to the final index file
-        indexFile << lexEntry.term;
-
-        // Write postings
-        for (const auto& posting : uniquePostings) {
-            indexFile << " " << posting.docID << ":" << posting.termFreq;
-        }
-
-        // Write newline
-        indexFile << "\n";
-
-        // Calculate the number of bytes written for this line
-        // Each character is 1 byte in ASCII
-        // Term + space + postings + newline
-        std::string line = lexEntry.term;
-        for (const auto& posting : uniquePostings) {
-            line += " " + std::to_string(posting.docID) + ":" + std::to_string(posting.termFreq);
-        }
-        line += "\n";
-
-        lexEntry.length = line.size();
-        currentOffset += lexEntry.length;
 
         // Add to lexicon
         lexicon.emplace_back(lexEntry);
+
+        // Update the currentOffset
+        currentOffset += lineBytes;
     }
 
     indexFile.close();
@@ -370,6 +398,11 @@ int main(int argc, char* argv[]) {
     }
 
     std::cout << "Merger completed successfully." << std::endl;
-    std::cout << "<term> <offset> <length> <docFreq>" << std::endl;
+    std::cout << "index.txt output format: " << std::endl;
+    std::cout << "term | gapDocID1 gapDocID2 ... | termFreq1 termFreq2 ..." << std::endl;
+    std::cout << "loxicon.txt output format: " << std::endl;
+    std::cout << "term offset length docFreq" << std::endl;
+    
+
     return EXIT_SUCCESS;
 }
