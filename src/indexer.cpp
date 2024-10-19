@@ -45,42 +45,25 @@ std::vector<std::string> tokenize(const std::string& text, const std::unordered_
     return tokens;
 }
 
-// Function to perform VarByte encoding on a single integer
-std::vector<uint8_t> varbyteEncode(int number) {
-    std::vector<uint8_t> bytes;
-    while (number >= 128) {
-        bytes.push_back((number & 0x7F) | 0x80);
-        number >>= 7;
-    }
-    bytes.push_back(number & 0x7F);
-    return bytes;
-}
-
-// Function to write intermediate posting file in binary format
-void writeBinaryPostingFile(const std::string& filename, 
-                            const std::unordered_map<std::string, std::vector<Posting>>& invertedIndex) {
-    std::ofstream outfile(filename, std::ios::binary);
+// Function to write intermediate posting file in text format
+void writeTextPostingFile(const std::string& filename, 
+                          const std::unordered_map<std::string, std::vector<Posting>>& invertedIndex) {
+    std::ofstream outfile(filename);
     if (!outfile.is_open()) {
-        throw std::runtime_error("Failed to open binary intermediate file for writing: " + filename);
+        throw std::runtime_error("Failed to open text intermediate file for writing: " + filename);
     }
 
     for (const auto& [term, postings] : invertedIndex) {
-        // Write term length and term
-        uint32_t termLength = term.size();
-        outfile.write(reinterpret_cast<const char*>(&termLength), sizeof(termLength));
-        outfile.write(term.c_str(), term.size());
+        // Write the term
+        outfile << term;
 
-        // Write number of postings
-        uint32_t numPostings = postings.size();
-        outfile.write(reinterpret_cast<const char*>(&numPostings), sizeof(numPostings));
-
-        // Write postings with VarByte encoding
+        // Write each posting as docID:termFreq separated by space
         for (const auto& posting : postings) {
-            std::vector<uint8_t> encodedDocID = varbyteEncode(posting.docID);
-            std::vector<uint8_t> encodedFreq = varbyteEncode(posting.termFreq);
-            outfile.write(reinterpret_cast<const char*>(encodedDocID.data()), encodedDocID.size());
-            outfile.write(reinterpret_cast<const char*>(encodedFreq.data()), encodedFreq.size());
+            outfile << " " << posting.docID << ":" << posting.termFreq;
         }
+
+        // End the line for the current term
+        outfile << "\n";
     }
 
     outfile.close();
@@ -136,8 +119,8 @@ void parseCollection(const std::string& filepath,
         // Check if the current block size exceeds the maximum allowed
         if (currentBlockSize >= maxBlockSize) {
             // Write the current inverted index to an intermediate file
-            std::string filename = outputDir + "/intermediate_" + std::to_string(blockCount++) + ".bin";
-            writeBinaryPostingFile(filename, invertedIndex);
+            std::string filename = outputDir + "/intermediate_" + std::to_string(blockCount++) + ".txt";
+            writeTextPostingFile(filename, invertedIndex);
             std::cout << "Written intermediate file: " << filename << std::endl;
 
             // Clear the in-memory inverted index and reset block size
@@ -150,8 +133,8 @@ void parseCollection(const std::string& filepath,
 
     // Write any remaining postings to an intermediate file
     if (!invertedIndex.empty()) {
-        std::string filename = outputDir + "/intermediate_" + std::to_string(blockCount++) + ".bin";
-        writeBinaryPostingFile(filename, invertedIndex);
+        std::string filename = outputDir + "/intermediate_" + std::to_string(blockCount++) + ".txt";
+        writeTextPostingFile(filename, invertedIndex);
         std::cout << "Written intermediate file: " << filename << std::endl;
     }
 }

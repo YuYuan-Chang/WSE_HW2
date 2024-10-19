@@ -9,6 +9,7 @@
 #include <memory>
 #include <algorithm>
 #include <cstdint>
+#include <sstream>
 
 // Namespace alias for convenience
 namespace fs = std::filesystem;
@@ -22,7 +23,7 @@ struct Posting {
 struct LexiconEntry {
     std::string term;
     uint64_t offset;     // Offset in the final inverted index file
-    uint32_t length;     // Length of the posting list in bytes
+    uint32_t length;     // Length of the postings list in bytes
     uint32_t docFreq;    // Number of documents containing the term
 };
 
@@ -31,10 +32,10 @@ struct PageTableEntry {
     std::string metadata; // e.g., URL
 };
 
-// PostingFileReader class to handle reading from intermediate binary files
+// PostingFileReader class to handle reading from intermediate text files
 class PostingFileReader {
 public:
-    PostingFileReader(const std::string& filepath) : infile(filepath, std::ios::binary), eof(false) {
+    PostingFileReader(const std::string& filepath) : infile(filepath), eof(false) {
         if (!infile.is_open()) {
             throw std::runtime_error("Failed to open intermediate file: " + filepath);
         }
@@ -54,52 +55,29 @@ public:
     }
 
     void readNextTerm() {
-        if (!infile.good()) {
+        if (!std::getline(infile, currentLine)) {
             eof = true;
             return;
         }
 
-        // Read term length
-        uint32_t termLength;
-        infile.read(reinterpret_cast<char*>(&termLength), sizeof(termLength));
-        if (infile.eof()) {
-            eof = true;
-            return;
-        }
+        // Parse the current line
+        std::istringstream iss(currentLine);
+        iss >> currentTerm;
 
-        // Read term
-        currentTerm.resize(termLength);
-        infile.read(&currentTerm[0], termLength);
-
-        // Read number of postings
-        uint32_t numPostings;
-        infile.read(reinterpret_cast<char*>(&numPostings), sizeof(numPostings));
-
-        // Read postings
         currentPostings.clear();
-        for (uint32_t i = 0; i < numPostings; ++i) {
-            // Read VarByte encoded docID
-            int docID = 0;
-            while (true) {
-                uint8_t byte;
-                infile.read(reinterpret_cast<char*>(&byte), sizeof(byte));
-                if (infile.eof()) {
-                    throw std::runtime_error("Unexpected EOF while reading docID.");
-                }
-                docID = (docID << 7) | (byte & 0x7F);
-                if ((byte & 0x80) == 0) break;
+        std::string postingStr;
+        while (iss >> postingStr) {
+            size_t colonPos = postingStr.find(':');
+            if (colonPos == std::string::npos) {
+                throw std::runtime_error("Malformed posting: " + postingStr);
             }
 
-            // Read VarByte encoded termFreq
-            int termFreq = 0;
-            while (true) {
-                uint8_t byte;
-                infile.read(reinterpret_cast<char*>(&byte), sizeof(byte));
-                if (infile.eof()) {
-                    throw std::runtime_error("Unexpected EOF while reading termFreq.");
-                }
-                termFreq = (termFreq << 7) | (byte & 0x7F);
-                if ((byte & 0x80) == 0) break;
+            int docID = std::stoi(postingStr.substr(0, colonPos));
+            int termFreq = std::stoi(postingStr.substr(colonPos + 1));
+
+            // Validate docID and termFreq
+            if (docID < 0 || termFreq < 0) {
+                throw std::runtime_error("Invalid docID or termFreq in posting: " + postingStr);
             }
 
             currentPostings.emplace_back(Posting{docID, termFreq});
@@ -109,6 +87,7 @@ public:
 private:
     std::ifstream infile;
     bool eof;
+    std::string currentLine;
     std::string currentTerm;
     std::vector<Posting> currentPostings;
 };
@@ -120,11 +99,11 @@ struct ComparePQNode {
     }
 };
 
-// Function to list intermediate binary files
+// Function to list intermediate text files
 std::vector<std::string> listIntermediateFiles(const std::string& directory) {
     std::vector<std::string> files;
     for (const auto& entry : fs::directory_iterator(directory)) {
-        if (entry.is_regular_file() && entry.path().extension() == ".bin") {
+        if (entry.is_regular_file() && entry.path().extension() == ".txt") {
             files.push_back(entry.path().string());
         }
     }
@@ -133,29 +112,22 @@ std::vector<std::string> listIntermediateFiles(const std::string& directory) {
     return files;
 }
 
-// Function to write the Lexicon
-void writeLexicon(const std::string& lexiconFilePath, const std::vector<LexiconEntry>& lexicon) {
-    std::ofstream lexFile(lexiconFilePath, std::ios::binary);
+// Function to write the Lexicon in text format
+void writeLexiconText(const std::string& lexiconFilePath, const std::vector<LexiconEntry>& lexicon) {
+    std::ofstream lexFile(lexiconFilePath);
     if (!lexFile.is_open()) {
         throw std::runtime_error("Failed to open lexicon file for writing: " + lexiconFilePath);
     }
 
     for (const auto& entry : lexicon) {
-        // Write term length and term
-        uint32_t termLength = entry.term.size();
-        lexFile.write(reinterpret_cast<const char*>(&termLength), sizeof(termLength));
-        lexFile.write(entry.term.c_str(), entry.term.size());
-
-        // Write offset, length, and docFreq
-        lexFile.write(reinterpret_cast<const char*>(&entry.offset), sizeof(entry.offset));
-        lexFile.write(reinterpret_cast<const char*>(&entry.length), sizeof(entry.length));
-        lexFile.write(reinterpret_cast<const char*>(&entry.docFreq), sizeof(entry.docFreq));
+        // Write term, offset, length, and docFreq separated by spaces
+        lexFile << entry.term << " " << entry.offset << " " << entry.length << " " << entry.docFreq << "\n";
     }
 
     lexFile.close();
 }
 
-// Function to build the Page Table from the collection file
+// Function to build the Page Table from the collection file (unchanged)
 std::vector<PageTableEntry> buildPageTable(const std::string& collectionPath) {
     std::vector<PageTableEntry> pageTable;
     std::ifstream infile(collectionPath);
@@ -182,7 +154,7 @@ std::vector<PageTableEntry> buildPageTable(const std::string& collectionPath) {
     return pageTable;
 }
 
-// Function to write the Page Table
+// Function to write the Page Table (unchanged; assuming binary format)
 void writePageTable(const std::string& pageTablePath, const std::vector<PageTableEntry>& pageTable) {
     std::ofstream pageFile(pageTablePath, std::ios::binary);
     if (!pageFile.is_open()) {
@@ -204,6 +176,7 @@ void writePageTable(const std::string& pageTablePath, const std::vector<PageTabl
 
 // Function to perform k-way merge and build the final inverted index
 void mergePostingFiles(const std::vector<std::string>& files, const std::string& indexFilePath,
+                      const std::string& lexiconFilePath,
                       std::vector<LexiconEntry>& lexicon) {
     // Initialize readers
     std::vector<std::unique_ptr<PostingFileReader>> readers;
@@ -223,13 +196,13 @@ void mergePostingFiles(const std::vector<std::string>& files, const std::string&
         }
     }
 
-    // Open final index file for writing
-    std::ofstream indexFile(indexFilePath, std::ios::binary);
+    // Open final index file for writing in text format
+    std::ofstream indexFile(indexFilePath);
     if (!indexFile.is_open()) {
         throw std::runtime_error("Failed to open final index file for writing: " + indexFilePath);
     }
 
-    uint64_t currentOffset = 0;
+    uint64_t currentOffset = 0; // Byte offset in the index file
 
     while (!minHeap.empty()) {
         auto [smallestTerm, fileIdx] = minHeap.top();
@@ -284,38 +257,28 @@ void mergePostingFiles(const std::vector<std::string>& files, const std::string&
         lexEntry.offset = currentOffset;
         lexEntry.docFreq = uniquePostings.size();
 
-        // Write postings to the index file with VarByte encoding
-        // Write number of postings
-        uint32_t numPostings = uniquePostings.size();
-        indexFile.write(reinterpret_cast<const char*>(&numPostings), sizeof(numPostings));
+        // Write the term and its postings to the final index file
+        indexFile << lexEntry.term;
 
         // Write postings
         for (const auto& posting : uniquePostings) {
-            // VarByte encode docID
-            std::vector<uint8_t> encodedDocID;
-            int number = posting.docID;
-            while (number >= 128) {
-                encodedDocID.push_back((number & 0x7F) | 0x80);
-                number >>= 7;
-            }
-            encodedDocID.push_back(number & 0x7F);
-            indexFile.write(reinterpret_cast<const char*>(encodedDocID.data()), encodedDocID.size());
-
-            // VarByte encode termFreq
-            std::vector<uint8_t> encodedFreq;
-            number = posting.termFreq;
-            while (number >= 128) {
-                encodedFreq.push_back((number & 0x7F) | 0x80);
-                number >>= 7;
-            }
-            encodedFreq.push_back(number & 0x7F);
-            indexFile.write(reinterpret_cast<const char*>(encodedFreq.data()), encodedFreq.size());
-
-            currentOffset += encodedDocID.size() + encodedFreq.size();
+            indexFile << " " << posting.docID << ":" << posting.termFreq;
         }
 
-        // Set length in bytes for lexicon
-        lexEntry.length = currentOffset - lexEntry.offset;
+        // Write newline
+        indexFile << "\n";
+
+        // Calculate the number of bytes written for this line
+        // Each character is 1 byte in ASCII
+        // Term + space + postings + newline
+        std::string line = lexEntry.term;
+        for (const auto& posting : uniquePostings) {
+            line += " " + std::to_string(posting.docID) + ":" + std::to_string(posting.termFreq);
+        }
+        line += "\n";
+
+        lexEntry.length = line.size();
+        currentOffset += lexEntry.length;
 
         // Add to lexicon
         lexicon.emplace_back(lexEntry);
@@ -356,30 +319,30 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
 
-    // List intermediate binary files
+    // List intermediate text files
     std::vector<std::string> intermediateFiles = listIntermediateFiles(intermediateDir);
     if (intermediateFiles.empty()) {
-        std::cerr << "No intermediate binary files found in directory: " << intermediateDir << std::endl;
+        std::cerr << "No intermediate text files found in directory: " << intermediateDir << std::endl;
         return EXIT_FAILURE;
     }
 
     std::cout << "Found " << intermediateFiles.size() << " intermediate files." << std::endl;
 
     // Merge posting files
-    std::string finalIndexPath = finalIndexDir + "/index.bin";
+    std::string finalIndexPath = finalIndexDir + "/index.txt";
+    std::string lexiconPath = finalIndexDir + "/lexicon.txt";
     std::vector<LexiconEntry> lexicon;
     try {
-        mergePostingFiles(intermediateFiles, finalIndexPath, lexicon);
+        mergePostingFiles(intermediateFiles, finalIndexPath, lexiconPath, lexicon);
         std::cout << "Merged postings into final index file: " << finalIndexPath << std::endl;
     } catch (const std::exception& ex) {
         std::cerr << "Error during merging: " << ex.what() << std::endl;
         return EXIT_FAILURE;
     }
 
-    // Write lexicon
-    std::string lexiconPath = finalIndexDir + "/lexicon.bin";
+    // Write lexicon in text format
     try {
-        writeLexicon(lexiconPath, lexicon);
+        writeLexiconText(lexiconPath, lexicon);
         std::cout << "Written lexicon file: " << lexiconPath << std::endl;
     } catch (const std::exception& ex) {
         std::cerr << "Error writing lexicon: " << ex.what() << std::endl;
@@ -407,5 +370,6 @@ int main(int argc, char* argv[]) {
     }
 
     std::cout << "Merger completed successfully." << std::endl;
+    std::cout << "<term> <offset> <length> <docFreq>" << std::endl;
     return EXIT_SUCCESS;
 }
