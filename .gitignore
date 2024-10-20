@@ -1,0 +1,8 @@
+collection/
+src/temp/
+sample*
+*.exe
+src/index*
+pagetable.tsv
+*_ascii*
+.vscode/
