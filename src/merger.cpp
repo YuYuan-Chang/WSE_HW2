@@ -16,6 +16,7 @@ namespace fs = std::filesystem;
 using namespace std;
 
 const int POSTING_PER_BLOCK = 64;
+const int MAX_DOCID = 10000000;
 
 // Struct definitions
 struct Posting {
@@ -239,6 +240,7 @@ void mergePostingFiles(const vector<string>& files, const string& indexFilePath,
         // Differential Encoding for docIDs
         int previousDocID = 0;
         int currDocID;
+        int lastBlockID;
 
         LexiconEntry lexEntry;
         lexEntry.term = smallestTerm;
@@ -246,6 +248,7 @@ void mergePostingFiles(const vector<string>& files, const string& indexFilePath,
         lexEntry.length = 0;
         
         for (auto& posting : mergedPostings) {
+             
             currDocID = posting.docID;
             if (postingCount % POSTING_PER_BLOCK == 0 && postingCount != 0) {
                 for (const auto& index : combinedIndex) {
@@ -255,11 +258,14 @@ void mergePostingFiles(const vector<string>& files, const string& indexFilePath,
                 indexFile.write(reinterpret_cast<char*>(combinedIndexBytes.data()), combinedIndexBytes.size());
                 BlockMetaData currBlock;
                 currBlock.size = static_cast<uint32_t>(combinedIndexBytes.size());
-                currBlock.lastDocID = currDocID;
+                currBlock.lastDocID = lastBlockID;
                 blockMetaData.push_back(currBlock);
                 combinedIndexBytes.clear();
             }
             else {
+                if (postingCount % POSTING_PER_BLOCK == POSTING_PER_BLOCK - 1) {
+                    lastBlockID = currDocID;
+                }
                 posting.docID -= previousDocID;
             }
             
@@ -274,6 +280,8 @@ void mergePostingFiles(const vector<string>& files, const string& indexFilePath,
             
         }
 
+        //
+
         lexEntry.docFreq = mergedPostings.size();
 
         // Add to lexicon
@@ -281,6 +289,19 @@ void mergePostingFiles(const vector<string>& files, const string& indexFilePath,
 
         // Update the currentOffset
         currentOffset += lexEntry.length;
+    }
+
+    //write out remaining index
+    if (postingCount % POSTING_PER_BLOCK != 0) {
+        for (int i = postingCount; i < POSTING_PER_BLOCK; i++) {
+            combinedIndex[i] = MAX_DOCID;
+            combinedIndex[i+POSTING_PER_BLOCK] = 0;
+        }
+        for (const auto& index : combinedIndex) {
+            vector<uint8_t> varbytes = intToVarByte(index);
+            combinedIndexBytes.insert(combinedIndexBytes.end(), varbytes.begin(), varbytes.end());
+            }
+            indexFile.write(reinterpret_cast<char*>(combinedIndexBytes.data()), combinedIndexBytes.size());
     }
 
     indexFile.close();
