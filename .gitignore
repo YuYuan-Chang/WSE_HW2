@@ -6,3 +6,4 @@ src/index*
 pagetable.tsv
 *_ascii*
 .vscode/
+varbyte*

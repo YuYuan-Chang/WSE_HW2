@@ -140,19 +140,36 @@ vector<uint8_t> intToVarByte(int num) {
     vector<uint8_t> bytes;
 
     while (num > 0) {
+        // Extract the 7 least significant bits
         uint8_t byte = num & 0x7F;
-        num >>= 7;
-        if (!bytes.empty()) {// If there are already bytes, set MSB
+        // Set the high bit to indicate more bytes if needed
+        if (num > 0x7F)
+        {
             byte |= 0x80;
         }
         bytes.push_back(byte);
+        // Shift the value to the right by 7 bits
+        num >>= 7;
     }
-    // add a single byte 0 if the number is 0
-    if (bytes.empty()) {
-        bytes.push_back(0);
+    return bytes;
+}
+
+//function to turn bytes to int
+int byteToInt(const std::vector<uint8_t>& bytes) {
+    int value = 0;
+    int shift = 0;
+
+    for (size_t i = 0; i < bytes.size(); ++i) {
+        value |= (bytes[i] & 0x7F) << shift; // Mask the highest bit
+        shift += 7;
+
+        if (bytes[i] & 0x80) {  // If the highest bit is 1, continue
+            continue;
+        }
+        break; // Exit if the highest bit is 0
     }
 
-    return bytes;
+    return value;
 }
    
 
@@ -257,7 +274,6 @@ void mergePostingFiles(const vector<string>& files, const string& indexFilePath,
             
         }
 
-        
         lexEntry.docFreq = mergedPostings.size();
 
         // Add to lexicon
@@ -276,7 +292,6 @@ void writeBlockMetaData(const string& blockMetaDataFilePath, const vector<BlockM
     if (!metaFile.is_open()) {
         throw runtime_error("Failed to open block meta data file for writing: " + blockMetaDataFilePath);
     }
-    cout << "meta data size" << blockMetaData.size() << endl;
 
     for (const auto& metaData : blockMetaData) {
         //write block meata data
@@ -293,7 +308,7 @@ int main() {
     auto start = chrono::high_resolution_clock::now();
 
     string intermediateDir = "src/temp";
-    string finalIndexDir = "src/index_3";
+    string finalIndexDir = "src/index_4";
 
     // Check if intermediate directory exists
     if (!fs::exists(intermediateDir) || !fs::is_directory(intermediateDir)) {
