@@ -190,7 +190,7 @@ void mergePostingFiles(const vector<string>& files, const string& indexFilePath,
                         vector<pair<string, size_t>>,
                         ComparePQNode> minHeap;
 
-    int postingCount = 0;
+    
     // Insert the first term from each reader into the heap
     for (size_t i = 0; i < readers.size(); ++i) {
         if (readers[i]->hasNext()) {
@@ -207,7 +207,8 @@ void mergePostingFiles(const vector<string>& files, const string& indexFilePath,
     uint64_t currentOffset = 0; // Byte offset in the index file
 
     vector<uint8_t> combinedIndexBytes;
-    vector<int> combinedIndex(POSTING_PER_BLOCK*2);
+    vector<int> combinedDocID;
+    vector<int> combinedFreq;
 
     while (!minHeap.empty()) {
         auto [smallestTerm, fileIdx] = minHeap.top();
@@ -241,6 +242,7 @@ void mergePostingFiles(const vector<string>& files, const string& indexFilePath,
         int previousDocID = 0;
         int currDocID;
         int lastBlockID;
+        int postingCount = 0;
 
         LexiconEntry lexEntry;
         lexEntry.term = smallestTerm;
@@ -248,39 +250,71 @@ void mergePostingFiles(const vector<string>& files, const string& indexFilePath,
         lexEntry.length = 0;
         
         for (auto& posting : mergedPostings) {
-             
+            
             currDocID = posting.docID;
+            //if the posting is more than POSTING_PER_BLOCK, we block them
             if (postingCount % POSTING_PER_BLOCK == 0 && postingCount != 0) {
-                for (const auto& index : combinedIndex) {
-                    vector<uint8_t> varbytes = intToVarByte(index);
+                BlockMetaData currBlock;
+                currBlock.size = 0;
+                currBlock.lastDocID = lastBlockID;
+                for (const auto& docID : combinedDocID) {
+                    vector<uint8_t> varbytes = intToVarByte(docID);
+                    combinedIndexBytes.insert(combinedIndexBytes.end(), varbytes.begin(), varbytes.end());
+                }
+                for (const auto& freq : combinedFreq) {
+                    vector<uint8_t> varbytes = intToVarByte(freq);
                     combinedIndexBytes.insert(combinedIndexBytes.end(), varbytes.begin(), varbytes.end());
                 }
                 indexFile.write(reinterpret_cast<char*>(combinedIndexBytes.data()), combinedIndexBytes.size());
-                BlockMetaData currBlock;
+                
                 currBlock.size = static_cast<uint32_t>(combinedIndexBytes.size());
-                currBlock.lastDocID = lastBlockID;
-                blockMetaData.push_back(currBlock);
-                combinedIndexBytes.clear();
-            }
-            else {
-                if (postingCount % POSTING_PER_BLOCK == POSTING_PER_BLOCK - 1) {
+                lexEntry.length += static_cast<uint32_t>(combinedIndexBytes.size());
+                if (postingCount == mergedPostings.size()-1) {
                     lastBlockID = currDocID;
                 }
-                posting.docID -= previousDocID;
+                
+                blockMetaData.push_back(currBlock);
+                combinedIndexBytes.clear();
+                combinedDocID.clear();
+                combinedFreq.clear();
             }
+            else if (postingCount % POSTING_PER_BLOCK == POSTING_PER_BLOCK - 1) {
+                lastBlockID = currDocID;
+            }
+
+            //take the difference of postings 
+            posting.docID -= previousDocID;
             
             previousDocID = currDocID;
     
-            int insertPos;
-            insertPos = postingCount % POSTING_PER_BLOCK;
-            combinedIndex[insertPos] = posting.docID;
-            combinedIndex[insertPos+POSTING_PER_BLOCK] = posting.termFreq;
-            lexEntry.length += (intToVarByte(posting.docID).size() + intToVarByte(posting.termFreq).size());
+            combinedDocID.push_back(posting.docID);
+            combinedFreq.push_back(posting.termFreq);
             postingCount++;
             
         }
 
-        //
+        //write out remaining index
+        if (!combinedDocID.empty()) {
+            BlockMetaData currBlock;
+            currBlock.size = 0;
+            currBlock.lastDocID = combinedDocID[-1];
+            for (const auto& docID : combinedDocID) {
+                vector<uint8_t> varbytes = intToVarByte(docID);
+                combinedIndexBytes.insert(combinedIndexBytes.end(), varbytes.begin(), varbytes.end());
+            }
+            for (const auto& freq : combinedFreq) {
+                vector<uint8_t> varbytes = intToVarByte(freq);
+                combinedIndexBytes.insert(combinedIndexBytes.end(), varbytes.begin(), varbytes.end());
+            }
+            indexFile.write(reinterpret_cast<char*>(combinedIndexBytes.data()), combinedIndexBytes.size());
+            
+            currBlock.size = static_cast<uint32_t>(combinedIndexBytes.size());
+            lexEntry.length += static_cast<uint32_t>(combinedIndexBytes.size());
+            blockMetaData.push_back(currBlock);
+            combinedIndexBytes.clear();
+            combinedDocID.clear();
+            combinedFreq.clear();
+        }
 
         lexEntry.docFreq = mergedPostings.size();
 
@@ -291,18 +325,7 @@ void mergePostingFiles(const vector<string>& files, const string& indexFilePath,
         currentOffset += lexEntry.length;
     }
 
-    //write out remaining index
-    if (postingCount % POSTING_PER_BLOCK != 0) {
-        for (int i = postingCount; i < POSTING_PER_BLOCK; i++) {
-            combinedIndex[i] = MAX_DOCID;
-            combinedIndex[i+POSTING_PER_BLOCK] = 0;
-        }
-        for (const auto& index : combinedIndex) {
-            vector<uint8_t> varbytes = intToVarByte(index);
-            combinedIndexBytes.insert(combinedIndexBytes.end(), varbytes.begin(), varbytes.end());
-            }
-            indexFile.write(reinterpret_cast<char*>(combinedIndexBytes.data()), combinedIndexBytes.size());
-    }
+    
 
     indexFile.close();
 }
