@@ -137,7 +137,7 @@ vector<uint8_t> openList(const string& term, const unordered_map<string, Lexicon
 
 }
 
-void sortListByLength(vector<pair<string, vector<uint8_t>>> invertedLists, const unordered_map<string, LexiconEntry>& lexicon) {
+void sortListByLength(vector<pair<string, vector<uint8_t>>>& invertedLists, const unordered_map<string, LexiconEntry>& lexicon) {
     sort(invertedLists.begin(), invertedLists.end(), ListLengthComparator(lexicon));
 }
 
@@ -202,6 +202,132 @@ vector<pair<string, vector<uint8_t>>> readInvertedIndices(const vector<string>& 
 
 }
 
+int searchBlockIndex(const vector<BlockMetaData>& blockMetaDataVec, const int& listStartPos) {
+    int left = 0;
+    int right = blockMetaDataVec.size() -1;
+    int index = -1;
+
+    while (left <=right) {
+        int mid = (left + right) /2;
+        if (blockMetaDataVec[mid].offset < listStartPos) {
+            left = mid + 1;
+        }
+        else if (blockMetaDataVec[mid].offset > listStartPos){
+            right = mid - 1;
+        }
+        else {
+            index = mid;
+            break;
+        }
+    }
+    return index;
+}
+
+template <typename T>
+vector<T> sliceVector(const vector<T>& vec, int start, int length) {
+    return vector<T>(vec.begin() + start, vec.begin()+start+length);
+}
+
+int searchNextDocID(vector<int>docIDListBlock, int lookUpDocID) {
+    int left = 0;
+    int right = docIDListBlock.size();
+    int foundIndex = -1;
+
+    while (left <= right) {
+        int mid = (left + right)/2;
+        if (docIDListBlock[mid] < lookUpDocID) {
+            left = mid + 1;
+        }
+        else {
+            foundIndex = mid;
+            right = mid - 1;
+        }
+    }
+    return foundIndex;
+
+}
+
+pair<int,int> nextGEQ(const pair<string, vector<uint8_t>>& invertedList, 
+            const int& lookUpDocID, const vector<BlockMetaData>& blockMetaDataVec, 
+            const unordered_map<string, LexiconEntry>& lexiconMap) {
+    //cout << "starting nextGEQ" << endl;
+    string term = invertedList.first;
+    //cout << term << endl;
+    vector<uint8_t> list = invertedList.second;
+    int listStartPos = lexiconMap.at(term).offset;
+    //cout << "start position is " << listStartPos << endl;
+    int listRestLength = lexiconMap.at(term).length;
+    //cout << "length " << listRestLength << endl;
+    int foundIndex = -1;
+    int foundDocID;
+    int foundFreq;
+
+    int blockIndex = searchBlockIndex(blockMetaDataVec, listStartPos);
+    //cout << "blockIndex is " << blockIndex << endl;
+    //cout << "blockStart is " << blockMetaDataVec[blockIndex].offset << endl;
+    //cout << "blockSize is " << blockMetaDataVec[blockIndex].length << endl;
+    if (blockIndex == -1) {
+        cerr << "error finding the next docID" << endl;
+        return make_pair(-1,-1);
+    }
+    listStartPos = 0;
+    bool startOfList = true;
+    while (listRestLength >= 0) {
+        if (blockMetaDataVec[blockIndex].lastDocID < lookUpDocID) {
+            startOfList = false;
+            //cout << "block last docID is " << blockMetaDataVec[blockIndex].lastDocID << endl;
+            //cout << "pushing to next block" << endl;
+            listRestLength -= blockMetaDataVec[blockIndex].length;
+            listStartPos += blockMetaDataVec[blockIndex].length;
+            blockIndex++;
+        }
+        else {
+            //cout << "block last docID is " << blockMetaDataVec[blockIndex].lastDocID << endl;
+            //cout << "stay at this block" << endl;
+            vector<uint8_t> listBlock = sliceVector(list, listStartPos, blockMetaDataVec[blockIndex].length);
+            vector<int> decompressedListBlock = bytesToIntVec(listBlock);
+            /*for (const auto& number : decompressedListBlock) {
+                cout << number << " ";
+            }
+            cout << endl;*/
+            int listBlockSize = decompressedListBlock.size();
+            vector<int> docIDListBlock = sliceVector(decompressedListBlock, 0, listBlockSize/2);
+            
+            int prevtDocID;
+            if (startOfList) {
+                prevtDocID = 0;
+            } else {
+                prevtDocID = blockMetaDataVec[blockIndex-1].lastDocID;
+            }
+            for (auto& docID : docIDListBlock)  {
+                docID += prevtDocID;
+                prevtDocID = docID;
+            }
+            /*for (const auto& number : docIDListBlock) {
+                cout << number << " ";
+            }*/
+            if (docIDListBlock[docIDListBlock.size()-1] < lookUpDocID) {
+                foundDocID = -1;
+                foundFreq = -1;
+                break;
+            } else {
+                foundIndex = searchNextDocID(docIDListBlock, lookUpDocID);
+                foundDocID = docIDListBlock[foundIndex];
+                foundFreq = decompressedListBlock[foundIndex + listBlockSize/2];
+                break;
+            }
+            
+            
+        }
+    }
+    if (foundIndex == -1) {
+        return make_pair(-1,-1);
+    }
+    else {
+        return make_pair(foundDocID, foundFreq);
+    }
+}
+
 int main() {
 
     // Start the timer
@@ -243,7 +369,7 @@ int main() {
 
         for (const auto& entry : blockMetaDataVec) {
             cout << entry.offset << " " << entry.length << " " << entry.lastDocID << endl;
-            if (count > 100) {
+            if (count > 400) {
                 break;
             }
             count++;
@@ -252,7 +378,7 @@ int main() {
 
         cout << "search engine is ready" << endl;
 
-        vector<string> query = {"000000", "peacefully", "000000000000001"};
+        vector<string> query = {"peacefully"};
         //read in inverted index lists
         vector<pair<string, vector<uint8_t>>> invertedLists = readInvertedIndices(query, lexiconMap, indexFilePath);
         sortListByLength(invertedLists, lexiconMap);
@@ -260,11 +386,16 @@ int main() {
         for (const auto& termList : invertedLists) {
             string term = termList.first;
             vector<int> numbers = bytesToIntVec(termList.second);
-            for (const auto& number : numbers) {
+            /*for (const auto& number : numbers) {
                 cout << number << " ";
             }
-            cout << endl;
+            cout << endl;*/
+            pair<int,int> found = nextGEQ(termList, 3, blockMetaDataVec, lexiconMap);
+            cout << "docID is " << found.first << endl;
+            cout << "frequency is " << found.second << endl;;
         }
+
+        
     } catch (const exception& e) {
         cerr << e.what() << endl;
     }
