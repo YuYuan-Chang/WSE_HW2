@@ -296,7 +296,10 @@ void mergePostingFiles(const vector<string>& files, const string& indexFilePath,
         if (!combinedDocID.empty()) {
             BlockMetaData currBlock;
             currBlock.size = 0;
-            currBlock.lastDocID = combinedDocID[-1];
+            currBlock.lastDocID = previousDocID;
+            /*if (smallestTerm == "peacefully") {
+                cout << "currBlock.lastDocID" << currBlock.lastDocID << endl;
+            }*/
             for (const auto& docID : combinedDocID) {
                 vector<uint8_t> varbytes = intToVarByte(docID);
                 combinedIndexBytes.insert(combinedIndexBytes.end(), varbytes.begin(), varbytes.end());
