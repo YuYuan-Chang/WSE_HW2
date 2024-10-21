@@ -147,40 +147,36 @@ int byteToInt(const vector<uint8_t>& bytes) {
     int shift = 0;
 
     for (size_t i = 0; i < bytes.size(); ++i) {
-        value |= (bytes[i] & 0x7F) << shift; // Mask the highest bit
+        value |= (bytes[i] & 0x7F) << shift; // Mask the highest bit and shift
         shift += 7;
 
-        if (bytes[i] & 0x80) {  // If the highest bit is 1, continue
-            continue;
+        // If the highest bit is not set, we are done
+        if (!(bytes[i] & 0x80)) {
+            break;
         }
-        break; // Exit if the highest bit is 0
     }
 
     return value;
 }
 
-vector<int> bytesToIntVec(vector<uint8_t>bytes) {
+vector<int> bytesToIntVec(const vector<uint8_t>& bytes) {
     vector<int> numbers;
-
-    int value = 0;
-    int shift = 0;
+    vector<uint8_t> buffer;
 
     for (size_t i = 0; i < bytes.size(); ++i) {
-        // Read the current byte
         uint8_t byte = bytes[i];
+        buffer.push_back(byte);
 
-        // Mask the highest bit and add to the value
-        value |= (byte & 0x7F) << shift; // Add the 7 lower bits
-
-        // If the highest bit is not set (0), we've reached the end of the integer
-        if ((byte & 0x80) == 0) {
-            numbers.push_back(value);
-            value = 0; // Reset for the next integer
-            shift = 0; // Reset shift for the next integer
-        } else {
-            // If the highest bit is set (1), continue to the next byte
-            shift += 7; // Move to the next 7 bits
+        // If the highest bit is not set, we have reached the end of the varbyte
+        if (!(byte & 0x80)) {
+            numbers.push_back(byteToInt(buffer)); // Convert to int and store
+            buffer.clear(); // Clear buffer for the next varbyte
         }
+    }
+    
+    // Handle case where buffer still has bytes (last varbyte)
+    if (!buffer.empty()) {
+        numbers.push_back(byteToInt(buffer));
     }
 
     return numbers;
@@ -188,7 +184,7 @@ vector<int> bytesToIntVec(vector<uint8_t>bytes) {
 
 vector<pair<string, vector<uint8_t>>> readInvertedIndices(const vector<string>& terms, const unordered_map<string, LexiconEntry>& lexicon, const string& filePath) {
     vector<pair<string, vector<uint8_t>>> invertedLists;
-    ifstream indexFile(filePath);
+    ifstream indexFile(filePath, ios::binary);
 
     if (!indexFile.is_open()) {
         throw runtime_error("Failed to open inverted index file for reading: " + filePath);
@@ -256,7 +252,7 @@ int main() {
 
         cout << "search engine is ready" << endl;
 
-        vector<string> query = {"0000002", "000000003335640952"};
+        vector<string> query = {"000000", "peacefully", "000000000000001"};
         //read in inverted index lists
         vector<pair<string, vector<uint8_t>>> invertedLists = readInvertedIndices(query, lexiconMap, indexFilePath);
         sortListByLength(invertedLists, lexiconMap);
@@ -264,7 +260,6 @@ int main() {
         for (const auto& termList : invertedLists) {
             string term = termList.first;
             vector<int> numbers = bytesToIntVec(termList.second);
-            cout << term << endl;
             for (const auto& number : numbers) {
                 cout << number << " ";
             }

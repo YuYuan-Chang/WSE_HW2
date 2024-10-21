@@ -16,7 +16,6 @@ namespace fs = std::filesystem;
 using namespace std;
 
 const int POSTING_PER_BLOCK = 64;
-const int MAX_DOCID = 10000000;
 
 // Struct definitions
 struct Posting {
@@ -156,7 +155,7 @@ vector<uint8_t> intToVarByte(int num) {
 }
 
 //function to turn bytes to int
-int byteToInt(const std::vector<uint8_t>& bytes) {
+int byteToInt(const vector<uint8_t>& bytes) {
     int value = 0;
     int shift = 0;
 
@@ -199,7 +198,7 @@ void mergePostingFiles(const vector<string>& files, const string& indexFilePath,
     }
 
     // Open final index file for writing in text format
-    ofstream indexFile(indexFilePath);
+    ofstream indexFile(indexFilePath, ios::binary);
     if (!indexFile.is_open()) {
         throw runtime_error("Failed to open final index file for writing: " + indexFilePath);
     }
